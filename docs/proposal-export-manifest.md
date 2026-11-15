@@ -1,6 +1,6 @@
 # Proposal: a stable export manifest for Immich
 
-> Draft for an Immich discussion. Not yet posted.
+> Posted as a Feature Request discussion: https://github.com/immich-app/immich/discussions/33306
 
 ## Problem
 

@@ -1,95 +1,96 @@
-# 复现手册
+# Runbook
 
-按顺序执行。每一步都有验证点。
-
----
-
-## 阶段 0：只读盘点（不改任何东西）
-
-1. 确认照片库位置与 iCloud 状态
-   - 照片 → 设置 → 通用：图库路径
-   - 照片 → 设置 → iCloud：是否「下载原件」
-2. 确认 Immich 可达、版本、资产总量
-3. 确认外置盘文件系统为 APFS、剩余空间 > 总量 × 2
-4. **算出真实缺口**：两边清单对撞（文件名 + 字节数 + 指纹）
-
-> 不要跳过这一步。我们的 91,000 个"缺口"实际只有 55,924 个。
-
-**验证点**：得到一张"待同步 N 个 / X GB"的表。
+Execute in order. Every phase has a verification point.
 
 ---
 
-## 阶段 1：沙盒
+## Phase 0 — Read-only survey
 
-- 复制一个 500 张的小图库
-- 所有机制先在上面跑通：预检、二分、重编码、弹窗处置
+1. Locate the Photos library and check iCloud settings
+   - Photos → Settings → General: library path
+   - Photos → Settings → iCloud: "Download Originals" or "Optimize Storage"
+2. Confirm Immich is reachable; note version and asset count
+3. Confirm the target volume is APFS with free space > 2× the payload
+4. **Compute the real gap**: match both sides by (filename, byte size, fingerprint)
 
-**验证点**：沙盒里能完整跑完 500 张，且无人工干预。
+> Do not skip this. Our naive "gap" of 91,000 assets was actually 55,924.
 
----
-
-## 阶段 2：试点
-
-- 选一个年份或相册（建议 100–200 张）
-- 导入 → 核对：数量、日期、相册归属、iCloud 是否上传
-
-**验证点**：库增量 == 导入量，日期无偏移。
+**Verification**: a table reading "N assets / X GB to transfer".
 
 ---
 
-## 阶段 3：批量
+## Phase 1 — Sandbox
+
+- Clone a 500-asset library
+- Validate every mechanism there first: pre-flight, binary search, re-encode, dialog handling
+
+**Verification**: 500 assets transfer with zero manual intervention.
+
+---
+
+## Phase 2 — Pilot
+
+- Pick one year or album (100–200 assets)
+- Import → verify count, dates, album membership, iCloud upload
+
+**Verification**: library delta == imported count; no date drift.
+
+---
+
+## Phase 3 — Bulk
 
 ```
-每批 60 → 导入 → 读报告 → 逐条记账 → 清理暂存
-批间停 15–30 秒，给 Photos 喘息
-每 5000 个重启一次 Photos（回收 WAL）
+per batch of 60:
+  stage hard links → import → read report → update ledger → clean staging
+  sleep 15–30 s between batches
+  restart Photos every 5,000 assets (WAL reclamation)
 ```
 
-**失败处理**：整批超时 → 二分（60 → 30+30 → … → 单文件）
+**Failure handling**: on a whole-batch timeout, bisect (60 → 30+30 → … → single file).
 
 ---
 
-## 阶段 4：修复
+## Phase 4 — Repair
 
-对 failed 的文件：
-1. `sips -s format jpeg` 或 `ffmpeg` 重编码
-2. `exiftool` 回写拍摄时间（GPS 通常会被 sips 保留）
-3. 重新导入
+For `failed` assets:
+1. Re-encode: `sips -s format jpeg` or `ffmpeg`
+2. Restore capture time with `exiftool` (GPS usually survives sips)
+3. Re-import
 
-**实测转化率 90%**（空载状态下）。
-
----
-
-## 阶段 5：增量
-
-- 每 5 分钟：`discover` 扫描 7 天内的新资产
-- 苹果设备延迟 24 小时（避开与 iCloud 的竞争）
-- 有新的则拉起批处理
+**Measured recovery rate: 90%** when Photos is otherwise idle.
 
 ---
 
-## 必须监控的四个指标
+## Phase 5 — Incremental
 
-| 指标 | 阈值 | 动作 |
+- Every 5 minutes: discover assets from the last 7 days
+- Delay Apple devices by 24 h (avoids racing iCloud)
+- If the queue is non-empty and nothing is running, start a batch
+
+---
+
+## Four metrics to watch
+
+| Metric | Threshold | Action |
 |---|---|---|
-| 日志心跳 | > 30 分钟无更新 | 强制重启 |
-| WAL 体积 | > 10 GB | 重启 Photos |
-| 磁盘剩余 | < 100 GB | 停止 |
-| 连续失败 | > 5 批 | 停止并告警 |
+| Log heartbeat | > 30 min stale | Force restart |
+| WAL size | > 10 GB | Restart Photos |
+| Free disk | < 100 GB | Stop |
+| Consecutive failures | > 5 batches | Stop and alert |
 
 ---
 
-## 授权清单（一次性）
+## Permissions (one-time)
 
-1. 完全磁盘访问 — 读写外置盘
-2. 照片 — 访问图库
-3. 自动化 → 照片 — 发送事件
-4. （可选）辅助功能 — 自动点掉弹窗
+1. Full Disk Access — read/write external volume
+2. Photos — access the library
+3. Automation → Photos — send Apple events
+4. (Optional) Accessibility — dismiss modal sheets
 
 ---
 
-## 回滚
+## Rollback
 
-- 状态库存有每张照片的 Photos UUID，可按批删除
-- 相册按年份组织，可整册删除
-- 导入前对 `Photos.sqlite` 做快照
+- The state database stores each asset's Photos UUID; delete by batch
+- Albums are organised by year and can be removed wholesale
+- Snapshot `Photos.sqlite` before starting

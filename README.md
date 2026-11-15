@@ -1,170 +1,132 @@
-# 把 Immich 单向镜像进 Apple Photos
+# Mirroring Immich into Apple Photos
 
-> 一次 5.6 万资产迁移的工程备忘录。
-> 记录的不是"怎么做"，而是"哪里会翻车、翻车时是什么样子、以及为什么第一版会慢 5 倍"。
+**Field notes from moving 55,924 assets into a closed, GUI-only photo library — with a 99.83% success rate and a painful lesson about where the time actually goes.**
+
+[中文版](README.zh-CN.md)
 
 ---
 
-## 摘要
+## TL;DR
 
-| 项 | 值 |
+| | |
 |---|---|
-| 目标 | Immich 作为**总库**，Apple Photos + iCloud 作为**展示层**；单向、只增不删 |
-| 规模 | 55,924 个唯一文件 / 252.7 GB |
-| 结果 | 55,859 入库（**99.83%**），95 个无法导入（0.17%） |
-| 照片库 | 46,189 → 101,963 |
-| 墙钟耗时 | 104.5 小时 |
-| **有效工作时间** | **约 20 小时（19%）** |
-| 核心结论 | **瓶颈不是吞吐，是稳定性工程。** |
+| Goal | Immich as the system of record; Apple Photos + iCloud as the viewing layer. One-way, append-only. |
+| Scope | 55,924 unique files / 252.7 GB |
+| Result | 55,859 in the library (**99.83%**), 95 rejected (0.17%) |
+| Library | 46,189 → 101,963 assets |
+| Wall clock | 104.5 hours |
+| **Actual work** | **~20 hours (19%)** |
+| Conclusion | **The bottleneck was never throughput. It was stability engineering.** |
 
 ---
 
-## 1. 问题的真实形状
+## 1. The real shape of the problem
 
-直觉上这是个"搬运文件"的问题：读出来、写进去。
+It looks like copying files. It is not.
 
-实际上它是个**跨信任边界写入封闭系统**的问题：
+It is **writing across a trust boundary into a closed system**:
 
-- 源端（Immich）是开放的：SQLite + REST API，随便读。
-- 目标端（Photos）是封闭的：只有一条 AppleScript 通道，**没有错误码、没有事务、没有事务回滚、失败方式是把 UI 卡住**。
-- 中间还隔着两层系统策略：TCC（隐私授权）与沙盒。
+- The source (Immich) is open: SQLite and a REST API. Read anything.
+- The destination (Photos) exposes exactly one channel: AppleScript. **No error codes, no transactions, no rollback — its failure mode is to freeze the UI.**
+- In between sit two OS policies: TCC (privacy consent) and the app sandbox.
 
-搬运只是 20% 的工作。另外 80% 是在搞清楚"目标端在什么条件下会悄悄地不干活"。
+Moving bytes was 20% of the work. The other 80% was discovering the conditions under which the destination silently stops working.
 
 ---
 
-## 2. 架构
+## 2. Architecture
 
-    Immich（总库）
-        │  ① 只读：asset 表 / API
+    Immich (system of record)
+        │  ① read-only: asset table / API
         ▼
-    状态库 state.db（每个资产一行：pending → imported / skipped / failed / unrepairable）
-        │  ② 硬链接暂存（同卷、零额外空间、保住原始文件名）
+    state.db  (one row per asset: pending → imported / skipped / failed / unrepairable)
+        │  ② hard-link staging (same volume, zero extra space, keeps original filenames)
         ▼
-    staging/<year>/<原始文件名>
-        │  ③ osxphotos import（一次一批，带 --report）
+    staging/<year>/<original_filename>
+        │  ③ osxphotos import (batched, with --report)
         ▼
-    Photos Library（外置 APFS）
-        │  ④ iCloud 自动上传
+    Photos Library (external APFS volume)
+        │  ④ iCloud upload
         ▼
     iPhone / iPad / Mac
 
-### 三个不可妥协的设计
+### Three non-negotiable design rules
 
-1. **以 `--report` 为唯一账本**，绝不信返回码。
-   返回码 0 不代表导入成功；报告文件才是唯一事实。
-2. **只增不删。** 全程零删除，所以最坏结果是"没进去"，不是"丢东西"。
-3. **幂等。** 任何一批可以无限重跑（内容指纹去重），这让"崩溃"从灾难降级为可接受事件。
+1. **The report file is the only ledger.** Never trust the exit code.
+   Exit code 0 does not mean "imported". Only `--report` does.
+2. **Append-only.** Nothing is ever deleted. The worst case is "not imported", never "lost".
+3. **Idempotent.** Any batch can be re-run forever (content-fingerprint dedupe), which downgrades "crash" from disaster to inconvenience.
 
 ---
 
-## 3. 五个陷阱
+## 3. The five traps
 
-> 这是全文最有价值的部分。每一条都附了代价。
+Full write-up with reproducible symptoms: **[docs/traps.md](docs/traps.md)**
 
-### 陷阱 1：Photos 的模态弹窗是全局阻塞器
+| # | Trap | Cost |
+|---|---|---|
+| 1 | A modal dialog in Photos blocks **every** AppleScript event for 240 s | ~20 h |
+| 2 | The SQLite WAL grew to **60 GB**, making Photos appear hung | ~1 day |
+| 3 | `--stop-on-error` aborts **and silently skips writing the report** | ~half a day |
+| 4 | launchd-spawned processes have **no TCC identity** — a watchdog ran 330 times and never worked | ~2 days |
+| 5 | Photos stores fingerprints for images but **not reliably for videos** | design-level |
 
-**现象**：一个无法解码的文件会让 Photos 弹出「无法导入 N 个项目」，必须人工点「好」。在它被点掉之前，**所有 AppleScript 事件阻塞 240 秒后超时**。
+The single most misleading one is #1: it presents as "Photos is busy", then as "the machine is overloaded", then as "a permissions problem". It took three wrong diagnoses to find a dialog box.
 
-**误导性**：表现像"Photos 忙""负载高""权限问题"。我们为此误判了三次。
+---
 
-**代价**：约 20 小时。
+## 4. Patterns that actually held up
 
-**对策**：三层防御
-1. 预检：`sips`（图）/ `ffprobe`（视频）先验证可解码，坏文件不进 Photos
-2. 规范化：可疑文件先转码成标准 JPEG / H.264 MP4 再送
-3. 兜底：用辅助功能 API 自动点掉弹窗
-
-### 陷阱 2：WAL 能涨到 60GB 并导致假死
-
-**现象**：6 万次导入后 `Photos.sqlite-wal` 达 60GB / 1459 万帧。原因是 `photolibraryd` 持有长期读快照，检查点无法推进。
-
-**对策**：重启 Photos 释放读锁并触发回收（实测 60GB → 13GB → 644KB）。无需 root 无法主动 TRUNCATE。
-
-### 陷阱 3：`--stop-on-error` 会让工具静默不产报告
-
-**现象**：累计 5 个错误即中止，**且不写 `--report` 文件**。账本依赖报告，于是"没有报告"被误判为"整批失败"，陷入无限重试。
-
-**教训**：上游工具的错误语义必须实测，不能读文档。
-
-### 陷阱 4：TCC 是三层，且 launchd 没有身份
-
-| 权限 | 决定什么 |
+| Pattern | Why it mattered |
 |---|---|
-| 完全磁盘访问 | 能不能读外置盘 |
-| 照片 | AppleScript 能不能读图库（否则 `-10004`） |
-| 自动化 | 能不能向 Photos 发事件 |
-
-launchd 启动的进程不继承任何身份 → `authorization denied`。
-一个 LaunchAgent 可以**跑 330 次全部静默失败**，看起来"一直在正常工作"。
-
-**推论**：任何依赖 launchd 的 macOS 自动化，必须先用 `kickstart` 验证一次并看日志。
-
-### 陷阱 5：内容指纹是唯一可靠判据，但视频没有
-
-`--skip-dups` 基于 Photos 库里的指纹。图片命中率高；**视频的指纹不一定被存储**。
-
-文件名、大小、日期都会骗人——我们从 UUID 名、时间戳名、同名不同内容上都踩过。
+| Report-based ledger | Across 230 failure events, it never once recorded "not imported" as "imported" |
+| Hard-link staging | Same inode, zero bytes, yet preserves original filenames (otherwise every asset is named after a UUID) |
+| Binary-search retry | One bad file no longer takes down 59 good ones; 34% of batches failed, but losses stayed local |
+| Re-encode repair | Recovered 569 of 631 failures (90%) |
+| Heartbeat liveness | Judge by log freshness, not by process existence |
 
 ---
 
-## 4. 有效的设计模式
+## 5. Where 80% of the time went
 
-| 模式 | 为什么有效 |
+At a measured healthy rate of 0.8 assets/s, 55,859 assets need ~20 hours. It took 104.5.
+
+| Loss | Estimate |
 |---|---|
-| 报告账本 | 在 230 次异常中从未把"没导入"记成"已导入" |
-| 硬链接暂存 | 同 inode、零空间，却保住了原始文件名（否则库里全是 UUID 名） |
-| 二分重试 | 一个坏文件不连累 59 个好文件，把 34% 的失败批次从"整批损失"降为"单点损失" |
-| 重编码修复 | 631 个失败项中救回 569 个（90%） |
-| 心跳式健康判据 | 看日志新鲜度，不看进程是否存在 |
+| Scheduler self-inflicted (4 h cap with no continuation, supervisor killed with the session, launchd watchdog that never ran) | 35–40 h |
+| Waiting on modal dialogs (230 events × 2–4 min) | 10–15 h |
+| Photos restarts (101 × 40 s) | ~1 h |
+| Binary-search retries and backoff | 3–5 h |
+
+**Only 15–20 hours were genuinely unavoidable. The rest was engineering error.**
 
 ---
 
-## 5. 效率分析：80% 去哪了
+## 6. Runbook
 
-按健康状态实测 0.8 个/秒，55,859 个只需约 20 小时。实际花了 104.5 小时。
-
-| 损耗项 | 估计 |
-|---|---|
-| 调度自伤（4h 上限无续跑、监督进程被会话带走、launchd 从未生效） | 35–40 h |
-| 等弹窗超时（230 次 × 2–4 分钟） | 10–15 h |
-| 重启 Photos（101 次 × 40 秒） | ~1 h |
-| 二分与退避 | 3–5 h |
-
-**其中真正不可避免的只有 15–20 小时。其余是工程错误。**
+Step-by-step, with verification points and monitoring thresholds: **[docs/runbook.md](docs/runbook.md)**
 
 ---
 
-## 6. 复现手册（要点）
+## 7. Limits (read before you start)
 
-1. 先建**沙盒图库**（500 张），所有机制在它上面验证完再上真库。
-2. 首次运行只做只读盘点：两边清单对撞，算出真实缺口。
-3. 账本从第一天就用工具自己的报告。
-4. 批量从 20 开始，失败可二分。
-5. 调度器上线前，先杀一次进程，确认它能自己回来。
-6. 任何长任务写心跳文件；监控看心跳，不看进程。
-
----
-
-## 7. 局限（必须写在最前面告诉使用者）
-
-- ❌ **不能开机自启**：TCC 是契约，不是缺陷；需要一次性人工授权
-- ❌ **不支持 Live Photo 配对**：Immich 把 HEIC/MOV 拆成两条
-- ⚠️ 依赖 AppleScript，苹果改一次就废
-- ⚠️ 弹窗只能逼近零，不能等于零
-- ⚠️ 锁屏/休眠时 Photos 不响应脚本
+- ❌ **It cannot auto-start.** TCC is a contract, not a bug. One-time manual grants are required.
+- ❌ **No Live Photo pairing.** Immich stores HEIC and MOV as two separate assets.
+- ⚠️ It depends on AppleScript. Apple changes it, this rots.
+- ⚠️ Modal dialogs can be driven to near-zero, never to zero.
+- ⚠️ Photos ignores AppleScript while the screen is locked.
 
 ---
 
-## 8. 如果要产品化
+## 8. If this became a product
 
-不是"一个同步脚本"，而是三层：
+Three layers, roughly 2–3 weeks of work:
 
-1. **防御层**：预检 → 规范化 → AX 兜底
-2. **身份层**：App 包 + LaunchAgent（一次授权，长期有效）
-3. **体验层**：菜单栏进度、一次性向导、完成通知
+1. **Defense**: pre-flight validation → canonical transcoding → accessibility-based dialog dismissal
+2. **Identity**: a signed app bundle + LaunchAgent (grant once, works forever)
+3. **Experience**: menu-bar progress, a first-run wizard, completion notifications
 
-工作量约 2–3 周。护城河不在代码，在上面那五条。
+The moat is not the code. It is the five traps above.
 
 ---
 

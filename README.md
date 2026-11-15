@@ -107,8 +107,19 @@ At a measured healthy rate of 0.8 assets/s, 55,859 assets need ~20 hours. It too
 Step-by-step, with verification points and monitoring thresholds: **[docs/runbook.md](docs/runbook.md)**
 
 ---
+## 7. Disclosure
 
-## 7. Limits (read before you start)
+This is a **field report, not a packaged tool**. Be aware of two things before borrowing the approach:
+
+**Direct database reads.** The method described here queries Immich's PostgreSQL directly (via `docker exec psql`) instead of the REST API. That was a deliberate trade-off for a one-off local migration: it avoided tens of thousands of HTTP round-trips and gave exact `originalPath` values.
+
+For anything long-running or multi-user, **use the REST API instead.** Direct database access couples you to Immich's internal schema, which changes between versions (it did between v3.2 and v3.3).
+
+**Not production-grade.** The scripts were written against one specific library on one machine. There is no test suite, no sandbox, and the paths are hard-coded. The reusable part is the *method*, not the code.
+
+---
+
+## 8. Limits (read before you start)
 
 - ❌ **It cannot auto-start.** TCC is a contract, not a bug. One-time manual grants are required.
 - ❌ **No Live Photo pairing.** Immich stores HEIC and MOV as two separate assets.
@@ -118,7 +129,7 @@ Step-by-step, with verification points and monitoring thresholds: **[docs/runboo
 
 ---
 
-## 8. If this became a product
+## 9. If this became a product
 
 Three layers, roughly 2–3 weeks of work:
 

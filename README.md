@@ -106,6 +106,15 @@ At a measured healthy rate of 0.8 assets/s, 55,859 assets need ~20 hours. It too
 
 Step-by-step, with verification points and monitoring thresholds: **[docs/runbook.md](docs/runbook.md)**
 
+## 6b. The operational layer
+
+Making it survive reboots, locks, and crashes is a separate problem with its own traps —
+App Nap freezing timers, detached children losing TCC identity, `pgrep -f` matching itself,
+and rebuilds silently revoking permissions.
+
+**[docs/operation.md](docs/operation.md)** — the runtime topology, the `status.json` contract,
+and the four traps that only appear once you leave the terminal.
+
 ---
 ## 7. Disclosure
 
@@ -131,13 +140,13 @@ For anything long-running or multi-user, **use the REST API instead.** Direct da
 
 ## 9. If this became a product
 
-Three layers, roughly 2–3 weeks of work:
+Three layers. The third is now partially built — see [docs/operation.md](docs/operation.md):
 
 1. **Defense**: pre-flight validation → canonical transcoding → accessibility-based dialog dismissal
-2. **Identity**: a signed app bundle + LaunchAgent (grant once, works forever)
-3. **Experience**: menu-bar progress, a first-run wizard, completion notifications
+2. **Identity**: an app bundle registered via `SMAppService` (grant once, survives reboots)
+3. **Experience**: menu-bar status, notifications, pause/resume — *implemented*
 
-The moat is not the code. It is the five traps above.
+The moat is not the code. It is the traps above.
 
 ---
 

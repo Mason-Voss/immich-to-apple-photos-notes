@@ -1,0 +1,131 @@
+# The operational layer
+
+A batch script that works is not the same as a system that keeps working.
+After the migration finished, the harder question was: **how do you keep this alive for months without a human watching?**
+
+---
+
+## Topology
+
+```
+ImmichSync.app        (Swift, LSUIElement — menu bar only, no dock icon)
+  └── guard_loop.sh    (direct child process, writes guard.pid)
+        └── watchdog.sh            every 5 minutes
+              ├── screen-lock check
+              ├── Photos liveness probe   (30 s timeout)
+              ├── Immich ping
+              ├── disk free / WAL size
+              ├── write status.json
+              ├── stall detection → restart
+              ├── repair queue when idle
+              └── discover new assets
+```
+
+## The `status.json` contract
+
+The app never talks to Python. The two halves communicate through one file:
+
+```json
+{
+  "ts": "2026-11-15 18:44:29",
+  "state": "idle",          // idle | syncing | stalled | error | locked
+  "pending": 0,
+  "failed": 0,
+  "imported": 47831,
+  "photos_ok": true,
+  "immich_ok": true,
+  "disk_free_gb": 2468,
+  "wal_gb": 7.5,
+  "busy": 0,
+  "batch_age_min": 4
+}
+```
+
+Keeping this contract dumb is what lets the UI be rewritten without touching the engine.
+
+---
+
+## Four traps that only appear in the operational layer
+
+### 1. A detached child loses the parent's TCC identity
+
+The guard must be a **direct child** of the app:
+
+```swift
+let p = Process()
+p.executableURL = URL(fileURLWithPath: "/bin/bash")
+p.arguments = [projectDir + "/guard_loop.sh"]
+try p.run()          // keep the reference alive
+```
+
+Using `nohup ... &` instead detaches it. The child is reparented to `launchd`, and — verified empirically — **loses access to the external volume**:
+
+```
+kill(pid, 0) == 0            // process is alive
+but: guard.pid never appeared, guard.log stopped updating
+```
+
+Same binary, same user, different parent → different authorization.
+
+### 2. App Nap freezes everything, including threads
+
+A background app with no windows gets napped. Timers do not fire. `Timer`, `DispatchSourceTimer`, and even a plain background thread with `Thread.sleep` all froze.
+
+Fix:
+
+```swift
+ProcessInfo.processInfo.beginActivity(
+    options: [.userInitiated, .idleSystemSleepDisabled, .suddenTerminationDisabled],
+    reason: "sync supervisor")
+```
+
+### 3. `pgrep -f` matches its own command line
+
+```bash
+/bin/bash -c "pgrep -f guard_loop.sh"   # always returns 0 — it matches itself
+```
+
+The supervisor concluded "already running" forever and never started anything. Avoid name-based supervision entirely: **write a PID file and use `kill(pid, 0)`.**
+
+### 4. Rebuilding the app silently revokes its permissions
+
+TCC binds grants to the code signature. Every recompile changes the ad-hoc signature, so the user's earlier approval no longer applies — with no error and no prompt.
+
+**Rule: compile → sign → authorize → then never rebuild.** Fix bugs by editing the shell/Python it calls, not the app.
+
+---
+
+## Screen lock
+
+While the screen is locked, Photos ignores AppleScript entirely. A naive watchdog interprets this as "Photos is hung" and restarts it — repeatedly, forever.
+
+Check first:
+
+```python
+import Quartz
+d = Quartz.CGSessionCopyCurrentDictionary()
+locked = bool(d and d.get('CGSSessionScreenIsLocked'))
+```
+
+If locked: write `state: locked`, do nothing, exit. Resume automatically on unlock.
+
+---
+
+## Permissions (one-time, on the app)
+
+| Grant | Why |
+|---|---|
+| Full Disk Access (or Removable Volumes) | read/write the external library |
+| Photos | send Apple events to Photos |
+| Login item (SMAppService) | start at login |
+
+`SMAppService.mainApp.register()` registers the login item programmatically; the user still confirms once in System Settings.
+
+---
+
+## What this layer does and does not buy you
+
+**Does:** survive reboots, restart a dead worker, pause on lock, notify on failure, expose state.
+**Does not:** adapt to a macOS major version that changes AppleScript, or to an Immich release that changes its schema.
+
+Long-term reliability here means *"when it breaks, it says so, and the fix is small"* — not *"it never breaks"*.

@@ -87,7 +87,20 @@ ProcessInfo.processInfo.beginActivity(
 
 The supervisor concluded "already running" forever and never started anything. Avoid name-based supervision entirely: **write a PID file and use `kill(pid, 0)`.**
 
-### 4. Rebuilding the app silently revokes its permissions
+### 4. PID reuse defeats "is it alive?" checks
+
+A PID file plus `kill(pid, 0)` is not enough after a reboot: PIDs are reused,
+so the supervisor finds "a live process" that is something else entirely and
+**never starts the worker**.
+
+Verify the command line too:
+
+```swift
+guard kill(pid, 0) == 0 else { return false }
+return runCapture("ps -p \(pid) -o command=").contains("guard_loop.sh")
+```
+
+### 5. Rebuilding the app silently revokes its permissions
 
 TCC binds grants to the code signature. Every recompile changes the ad-hoc signature, so the user's earlier approval no longer applies — with no error and no prompt.
 

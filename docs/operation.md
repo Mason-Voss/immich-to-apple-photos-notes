@@ -95,6 +95,28 @@ TCC binds grants to the code signature. Every recompile changes the ad-hoc signa
 
 ---
 
+### 5. After a reboot, Photos does not launch itself
+
+The login item brings the app back, the app spawns the guard — and then the whole chain reports
+`state: error` because **Photos is not running**. A probe that only *checks* whether Photos is alive
+will never bring it back.
+
+The watchdog must launch it:
+
+```bash
+if pgrep -x Photos >/dev/null; then
+    ... probe ...
+else
+    open -a Photos
+    sleep 20
+    ... probe again ...
+fi
+```
+
+Found during the post-reboot verification, which is exactly what that verification was for.
+
+---
+
 ## Screen lock
 
 While the screen is locked, Photos ignores AppleScript entirely. A naive watchdog interprets this as "Photos is hung" and restarts it — repeatedly, forever.

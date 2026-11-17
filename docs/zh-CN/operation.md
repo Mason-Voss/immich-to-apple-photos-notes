@@ -101,10 +101,26 @@ TCC 把授权绑在代码签名上。每次重新编译，临时签名就变了�
 
 ## 锁屏
 
-屏幕锁定期间，Photos 完全无视 AppleScript。
-天真的看护会把它当成“Photos 卡死”，然后反复重启——永远重启不完。
+屏幕锁定期间，Photos 可能无视 AppleScript。天真的看护会把它当成「Photos 卡死」，
+然后反复重启——永远重启不完。
 
-先判断：
+**但「锁屏」这个信号本身不可靠。** `CGSSessionScreenIsLocked` 会被一次短暂的
+屏幕休眠置位。把它当成前置条件，就会把一套完全健康的系统停掉——我们正好踩了这个坑：
+App 停在 `state: locked`，而 Photos 响应只要 0.2 秒。
+
+正确的顺序是反过来的：**先探测 Photos，锁屏只用来解释失败。**
+
+```bash
+if probe_photos; then
+    PHOTOS_OK=true
+elif [ "$LOCKED" = "yes" ]; then
+    pause            # 真锁屏 + 真不应答
+else
+    restart_photos   # 因为别的原因不应答
+fi
+```
+
+供参考，检查本身的写法：
 
 ```python
 import Quartz

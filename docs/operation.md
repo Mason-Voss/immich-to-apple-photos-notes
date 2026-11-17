@@ -132,9 +132,23 @@ Found during the post-reboot verification, which is exactly what that verificati
 
 ## Screen lock
 
-While the screen is locked, Photos ignores AppleScript entirely. A naive watchdog interprets this as "Photos is hung" and restarts it — repeatedly, forever.
+While the screen is locked, Photos may ignore AppleScript entirely. A naive watchdog interprets this as "Photos is hung" and restarts it — repeatedly, forever.
 
-Check first:
+**But the lock flag itself is unreliable.** `CGSSessionScreenIsLocked` can be set by a brief display sleep, so treating it as a prerequisite pauses a perfectly healthy system — which is exactly what happened here: the app sat in `state: locked` while Photos was answering in 0.2 s.
+
+The correct order is the other way round: **probe Photos first, use the lock flag only to explain a failure.**
+
+```bash
+if probe_photos; then
+    PHOTOS_OK=true
+elif [ "$LOCKED" = "yes" ]; then
+    pause            # genuinely locked and genuinely unresponsive
+else
+    restart_photos   # unresponsive for another reason
+fi
+```
+
+For reference, the check itself:
 
 ```python
 import Quartz

@@ -105,3 +105,44 @@ next step must always be *open the source file and read its EXIF*.
 # 4. the sentinel
 #    -180,-180 means "no location" in Photos. Treating it as data inflates every GPS metric.
 ```
+---
+
+## When there is no EXIF at all: rescuing dates from filenames
+
+About 7,500 files in this library — WeChat exports, screenshots, OPPO camera shots, re-saved images —
+carry **no date metadata whatsoever**. Both Immich and Photos fell back to the file's save time,
+which for a bulk copy in Nov 2025 dumped them all into November 2025. That is what "the timeline is a
+mess" looks like in practice.
+
+The filename is the only remaining evidence:
+
+```
+IMG20220813165207.jpg          -> 2022-08-13 16:52:07
+wx_camera_1669803238932.jpg    -> epoch ms -> 2022-11-30
+mmexport1661100000000.jpg      -> epoch ms
+Screenshot_2022-11-19-18-22-26_...jpg
+```
+
+### The algorithm, and the two ways it goes wrong
+
+1. Find **all** candidate date patterns, then take the one appearing **earliest** in the string.
+   Not "try epoch first" — a trailing numeric ID beats an epoch in priority otherwise
+   (`IMG_20181223_182458_1581298172029.jpg` would land in 2020 instead of 2018).
+2. **Validate the year.** Pure-numeric names like `2102052040521054.mp4` will happily match
+   `20xx` and produce year 2052. Reject anything outside 1990..now+1.
+
+The first run of this fix hit both bugs and produced years 2029/2034/2052. It was rolled back from a
+full database backup and re-run. **Always dry-run: print the target-year histogram before writing.**
+
+### EXIF still wins
+
+631 of the candidates turned out to have real EXIF that agreed with the stored date — the *filename*
+was misleading. Trust order: EXIF → filename → file time.
+
+### What remains unfixable
+
+1,033 files have neither EXIF nor a date in the name. The only other clue would be the file's
+creation time, which for copied files *is* the wrong value being corrected. For the 4 AVI files,
+`ffprobe` was tried for an embedded `creation_time` — none had one.
+
+**Result of the pass: 8,147 wrong dates → 863 (89.4% fixed).**

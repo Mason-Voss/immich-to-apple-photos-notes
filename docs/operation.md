@@ -130,6 +130,48 @@ Found during the post-reboot verification, which is exactly what that verificati
 
 ---
 
+## Albums created by scripts are stuck in manual order
+
+Every album created through AppleScript gets `ZCUSTOMSORTKEY = 1` — **manual order** — even an
+empty one. Verified by creating a throwaway album and reading the database back.
+
+```
+AlbumSortOrder: UNKNOWN=0  MANUAL=1  NEWEST_FIRST=2  OLDEST_FIRST=3  TITLE=5
+```
+
+The consequence: the album displays **the order items were added**, which for a bulk import across
+several years is essentially arbitrary. It looks like "the photos are in a weird order".
+
+There is no supported escape hatch:
+
+* `album` in Photos' scripting dictionary contains only `media item` — **no sort property**.
+* The Sort menu (View → Sort) belongs to the main menu bar, not the album toolbar, and did not
+  persist the change for these albums.
+
+The fix that works: with Photos **closed**, rewrite the album's item order to match capture date.
+
+```sql
+CREATE TEMP TABLE m AS
+SELECT rel.rowid AS rid,
+       ROW_NUMBER() OVER (PARTITION BY rel.Z_34ALBUMS
+                          ORDER BY a.ZDATECREATED ASC, a.Z_PK ASC) * 1024 AS nk
+FROM Z_34ASSETS rel
+JOIN ZGENERICALBUM g ON g.Z_PK = rel.Z_34ALBUMS
+JOIN ZASSET a ON a.Z_PK = rel.Z_3ASSETS
+WHERE g.ZPARENTFOLDER = <folder-pk>;
+
+UPDATE Z_34ASSETS
+SET Z_FOK_3ASSETS = (SELECT nk FROM m WHERE m.rid = Z_34ASSETS.rowid)
+WHERE rowid IN (SELECT rid FROM m);
+```
+
+Back up `Photos.sqlite` first; check `PRAGMA quick_check` afterwards; verify the member count per
+album is unchanged. Photos accepts the rewritten order and does not revert it.
+
+**This is a direct write to the Photos database — not something to do casually.**
+
+---
+
 ## Screen lock
 
 While the screen is locked, Photos may ignore AppleScript entirely. A naive watchdog interprets this as "Photos is hung" and restarts it — repeatedly, forever.

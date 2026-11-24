@@ -67,6 +67,25 @@ Kept because the wrong turns are the expensive part.
 
 ---
 
+## Phase 5 — Living with it (Nov 17–24)
+
+The migration was "done". Then real use found things the tests had not.
+
+| Date | Finding | Outcome |
+|---|---|---|
+| 11-17 | Lock detection false-positived on a brief display sleep; a healthy system sat in `state: locked` while Photos answered in 0.2 s | Probe Photos first; use the lock flag only to *explain* a failure |
+| 11-24 | Every year album displayed in a strange order | Script-created albums default to **manual sort** (`ZCUSTOMSORTKEY=1`), and there is no scripting API to change it. Fixed by rewriting the album item order in the database — 5,960 inversions → 0, member counts unchanged |
+| 11-24 | User reported "many photos missing" from the year albums | Not missing. The albums contain only what this project imported (58,949); the library also holds 43,602 photos that were already in iCloud and never entered Immich |
+| 11-24 | Timeline dates felt scrambled | 85.5% exact; 12% off by exactly 8h and **Immich was the wrong one**; 2.5% genuinely wrong — see [metadata-fidelity.md](metadata-fidelity.md) |
+
+**Two lessons worth keeping:**
+
+1. **A "finished" migration is not a verified one.** Every problem above appeared only under real use.
+2. **The master library is not axiomatically correct.** In the 8-hour group, Immich — the source of
+   truth — had the wrong timestamps, and the import was right.
+
+---
+
 ## Final numbers
 
 | | |

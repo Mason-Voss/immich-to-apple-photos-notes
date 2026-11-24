@@ -104,7 +104,7 @@ At a measured healthy rate of 0.8 assets/s, 55,859 assets need ~20 hours. It too
 
 ## 6. Runbook
 
-Step-by-step, with verification points and monitoring thresholds: **[docs/runbook.md](docs/runbook.md)** · **[docs/journal.md](docs/journal.md)**
+Step-by-step, with verification points and monitoring thresholds: **[docs/runbook.md](docs/runbook.md)** · **[docs/journal.md](docs/journal.md)** · **[docs/metadata-fidelity.md](docs/metadata-fidelity.md)**
 
 ## 6b. The operational layer
 

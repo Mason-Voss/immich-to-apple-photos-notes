@@ -170,6 +170,27 @@ album is unchanged. Photos accepts the rewritten order and does not revert it.
 
 **This is a direct write to the Photos database — not something to do casually.**
 
+### The order drifts back
+
+A manual-order album appends new items at the end. So every subsequent import silently breaks the
+chronological order again — the morning after the repair, 74 inversions had reappeared, all in the
+two most recent years.
+
+Sorting once is not a fix; it is a maintenance job. The watchdog now checks for inversions on every
+tick and re-sorts only when it finds some (the check is a cheap window query, the re-sort takes ~30 s
+for 57k rows):
+
+```bash
+INV=$(sqlite3 ... "SELECT COUNT(*) FROM (
+  SELECT a.ZDATECREATED t,
+         LAG(a.ZDATECREATED) OVER (PARTITION BY rel.Z_34ALBUMS ORDER BY rel.Z_FOK_3ASSETS) p
+  ...) WHERE p IS NOT NULL AND t < p")
+[ "$INV" -eq 0 ] && exit 0
+# ... rewrite Z_FOK_3ASSETS ...
+```
+
+Writes succeed while Photos is running, and Photos does not revert them.
+
 ---
 
 ## Screen lock

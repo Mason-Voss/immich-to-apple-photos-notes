@@ -177,3 +177,19 @@ For the 1,179 photos in Oct–Dec 2025 that carry nothing usable, every route wa
 
 They are single copies. The information was destroyed before it reached this machine, and the only
 remaining source is the owner's memory.
+---
+
+## Known limitation (accepted 2026-11-25)
+
+**1,179 photos dated Oct–Dec 2025 have no recoverable capture date.** They are WeChat exports,
+screenshots and re-saved images from 2013–2018 that were bulk-copied into both Immich and Photos in
+the autumn of 2025; every date-bearing field was stripped before they arrived.
+
+Six recovery routes were tested (EXIF, filename, file timestamps, source folder names, byte-size
+matching, full content hashing) — see above. They are single copies.
+
+**Owner's decision: accept rather than approximate.** Assigning a guessed year with a fabricated day
+would replace a known-unknown with a confident error. These files keep their copy date and are
+understood to be undated.
+
+Impact: 1,179 of 103,412 assets (1.1%). The remaining 92.6% of previously-wrong dates were corrected.

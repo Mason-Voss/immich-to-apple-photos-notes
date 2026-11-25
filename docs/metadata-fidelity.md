@@ -146,3 +146,34 @@ creation time, which for copied files *is* the wrong value being corrected. For 
 `ffprobe` was tried for an embedded `creation_time` — none had one.
 
 **Result of the pass: 8,147 wrong dates → 863 (89.4% fixed).**
+### Second pass: boundaries matter more than coverage
+
+The first pass used an epoch pattern of `1[5-9]\d{11}`, which silently only covers timestamps after
+2017. Everything from 2013–2017 (1.3–1.49 trillion ms) was skipped. Widening it to any 13-digit
+`1\d{12}` recovered those — but only with **digit boundaries**:
+
+```python
+epoch = re.compile(r'(?<!\d)(1\d{12})(?!\d)')
+```
+
+Without the boundaries, `2101102315334972.mp4` (a 16-digit ID) gets sliced into a plausible 2002
+date, and `52058797899713231641678292816480.jpg` (32 digits) yields 2022. Twelve such corrections
+from the first pass had to be reverted from the backup.
+
+**Rule: a date pattern without boundaries is a date generator, not a date parser.**
+
+### Six ways to date a file that has no date — five of them failed
+
+For the 1,179 photos in Oct–Dec 2025 that carry nothing usable, every route was tested:
+
+| Route | Outcome |
+|---|---|
+| EXIF | absent — stripped during re-save |
+| filename | no date token |
+| file created/modified time | *is* the wrong value being corrected |
+| source folder name | UUID substrings produced fake dates (2059, 2084) |
+| same byte size as another asset | 72 matches, all false (GIF paired with JPG) |
+| content hash vs whole library | all 1,147 hashed; **4** true duplicates |
+
+They are single copies. The information was destroyed before it reached this machine, and the only
+remaining source is the owner's memory.

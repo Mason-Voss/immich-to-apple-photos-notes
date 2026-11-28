@@ -108,6 +108,25 @@ TCC binds grants to the code signature. Every recompile changes the ad-hoc signa
 
 ---
 
+### 4b. Do not launch Photos when there is nothing to do
+
+The "launch Photos if it is not running" rule was unconditional, so every five minutes it reopened
+an app the owner had just closed — seven times over two weeks, and maddening precisely because the
+cause is invisible.
+
+A supervisor should only touch a GUI app when it has work for it:
+
+```bash
+P0=$(pending count); F0=$(failed count)
+if [ "$P0" -eq 0 ] && [ "$F0" -eq 0 ]; then
+    PHOTOS_OK=true      # nothing to do; leave the app alone
+else
+    ... probe, launch, restart ...
+fi
+```
+
+**Rule: automation that touches a user-visible app must have a reason every single time.**
+
 ### 5. After a reboot, Photos does not launch itself
 
 The login item brings the app back, the app spawns the guard — and then the whole chain reports
